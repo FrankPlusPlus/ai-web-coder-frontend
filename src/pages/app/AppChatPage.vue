@@ -4,7 +4,20 @@
       <div class="title">{{ app?.appName ?? `应用#${appId}` }}</div>
       <a-space>
         <a-button @click="goEdit">编辑信息</a-button>
-        <a-button type="primary" :loading="deploying" @click="doDeploy">部署</a-button>
+        <template v-if="deployedPreviewUrl">
+          <a-dropdown>
+            <template #overlay>
+              <a-menu @click="handleDeployMenuClick">
+                <a-menu-item key="redeploy">重新部署</a-menu-item>
+                <a-menu-item key="view">查看部署</a-menu-item>
+              </a-menu>
+            </template>
+            <a-button type="primary" :loading="deploying">部署</a-button>
+          </a-dropdown>
+        </template>
+        <template v-else>
+          <a-button type="primary" :loading="deploying" @click="doDeploy">部署</a-button>
+        </template>
       </a-space>
     </div>
 
@@ -12,6 +25,9 @@
       <a-col :xs="24" :lg="12" class="left">
         <a-card size="small" title="对话" class="panel" :bordered="true">
           <div class="messages" ref="messageBoxRef" @click="handleMessageClick">
+            <div class="load-more" style="display:flex;justify-content:center;margin-bottom:8px;">
+              <a-button v-if="hasMoreHistory" size="small" :loading="loadingHistory" @click="loadMoreHistory">加载更多</a-button>
+            </div>
             <div
               v-for="(m, idx) in messages"
               :key="idx"
@@ -46,7 +62,7 @@
         <a-card size="small" title="预览" class="panel" :bordered="true">
           <div class="preview-actions">
             <a-space>
-              <a-button :disabled="!previewUrl" @click="refreshPreview">刷新预览</a-button>
+              <a-button :disabled="!app?.codeGenType" @click="refreshPreview">刷新预览</a-button>
               <a-button :disabled="!previewUrl" @click="openPreview">新窗口打开</a-button>
               <a-typography-text v-if="previewUrl" type="secondary">{{ previewUrl }}</a-typography-text>
             </a-space>
@@ -66,6 +82,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getAppVoById, deployApp } from '@/api/appController'
+import { listAppChatHistory } from '@/api/chatHistoryController'
+import { useLoginUserStore } from '@/stores/loginUser'
 import { openEventSource, type EventSourceClient } from '@/utils/sse'
 import { buildDeployPreviewUrl, buildGeneratedPreviewUrl } from '@/utils/appPreview'
 import { setPreviewUrl, getPreviewUrl, hasPreviewUrl } from '@/utils/deployPreviewStore'
@@ -76,6 +94,7 @@ import 'highlight.js/styles/github.css'
 type ChatMsg = {
   role: 'user' | 'ai'
   content: string
+  createTime?: string
 }
 
 const route = useRoute()
@@ -86,12 +105,17 @@ const appId = computed(() => String(route.params.id ?? ''))
 const app = ref<API.AppVO>()
 
 const messages = ref<ChatMsg[]>([])
+const hasMoreHistory = ref(false)
+const loadingHistory = ref(false)
+// 记录当前已加载最早一条的 createTime，用于作为游标请求更早记录
+const earliestCreateTime = ref<string | undefined>()
 const input = ref('')
 
 const sending = ref(false)
 const deploying = ref(false)
 
 const previewUrl = ref('')
+const deployedPreviewUrl = ref('')
 const iframeNonce = ref(0)
 const iframeSrc = computed(() => {
   if (!previewUrl.value) return ''
@@ -128,6 +152,7 @@ const markDoneAndFinalize = async (aiMsg?: ChatMsg) => {
   // 将流式文本落回消息内容，之后再走 markdown 渲染
   if (aiMsg) {
     aiMsg.content = streamingText.value
+    if (!aiMsg.createTime) aiMsg.createTime = new Date().toISOString()
   }
   sending.value = false
   streamingMsgIndex.value = -1
@@ -139,6 +164,8 @@ const markDoneAndFinalize = async (aiMsg?: ChatMsg) => {
   }
   // 重新拉一次应用信息（例如 deployKey 等）
   await loadApp({ skipAutoSend: true })
+  // 完成后刷新预览为生成页面，保证最新交互结果可见
+  refreshPreview()
 }
 
 const loadApp = async (opts?: { skipAutoSend?: boolean }) => {
@@ -179,32 +206,121 @@ const loadApp = async (opts?: { skipAutoSend?: boolean }) => {
   // 优先使用持久化的 previewUrl（首次部署返回的完整 URL）
   const stored = getPreviewUrl(appId.value)
   if (stored) {
-    console.log('loadApp: using stored previewUrl', stored)
-    previewUrl.value = stored
+    deployedPreviewUrl.value = stored
+    console.log('loadApp: using stored deployedPreviewUrl', stored)
   } else if (app.value.deployKey) {
-    // 否则按常规逻辑设置（后端保存的 deployKey）
     const built = buildDeployPreviewUrl(app.value.deployKey)
+    deployedPreviewUrl.value = built
     console.log('loadApp: using buildDeployPreviewUrl from deployKey', app.value.deployKey, '->', built)
-    previewUrl.value = built
   }
 
-  if (opts?.skipAutoSend) return
+  // 不在这里直接切换 iframe（refreshPreview 会负责展示生成预览）
 
+  if (opts?.skipAutoSend) return
   const initPrompt = app.value?.initPrompt?.trim()
   const key = INIT_SENT_KEY(appId.value)
   const sent = sessionStorage.getItem(key) === '1'
 
-  // 双重门禁：
-  // 1) sessionStorage 标记
-  // 2) 本次页面内是否正在自动发送
-  // 3) 防止同一个 prompt 因为状态刷新重复触发
-  if (initPrompt && !sent && messages.value.length === 0 && !autoSendInFlight.value && initPrompt !== lastAutoSentPrompt.value) {
+  // 只有当：
+  // - 有 initPrompt
+  // - 之前未在 sessionStorage 标记
+  // - 当前应用属于自己
+  // - 当前没有任何对话历史（前面已经加载过一次历史）
+  // - 没有正在自动发送
+  // - 避免同一个 prompt 被重复发送
+  const loginStore = useLoginUserStore()
+  const isOwnApp = !!(app.value?.user?.id && loginStore.loginUser?.id && app.value.user.id === loginStore.loginUser.id)
+
+  if (
+    initPrompt &&
+    !sent &&
+    messages.value.length === 0 &&
+    !autoSendInFlight.value &&
+    initPrompt !== lastAutoSentPrompt.value &&
+    isOwnApp
+  ) {
     autoSendInFlight.value = true
     lastAutoSentPrompt.value = initPrompt
     sessionStorage.setItem(key, '1')
     input.value = initPrompt
     // 注意：send 内部会把 autoSendInFlight 复位
     void send({ isAuto: true })
+  }
+}
+
+// 拉取第一页（最近一页）对话历史，按创建时间升序放入 messages
+const loadHistory = async () => {
+  if (!appId.value) return
+  loadingHistory.value = true
+  try {
+    const res = await listAppChatHistory({ appId: appId.value as any })
+    if (res.data.code !== 0 || !res.data.data) {
+      message.error('获取对话历史失败：' + (res.data.message ?? ''))
+      return
+    }
+    const records = res.data.data.records ?? []
+    // 把后端返回的记录转换为页面需要的格式
+    const mapped = (records as API.ChatHistory[])
+      .map((r) => ({
+        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' : 'user',
+        content: r.message ?? '',
+        createTime: r.createTime,
+      }))
+      // 升序
+      .sort((a, b) => (a.createTime || '').localeCompare(b.createTime || ''))
+
+    messages.value = mapped
+    earliestCreateTime.value = mapped.length ? mapped[0].createTime : undefined
+    const total = res.data.data.totalRow ?? 0
+    hasMoreHistory.value = total > messages.value.length
+  } finally {
+    loadingHistory.value = false
+    // 如果没有历史记录则允许 loadApp 执行自动发送（initPrompt），否则跳过自动发送
+    if (!messages.value.length) {
+      await loadApp()
+    } else {
+      await loadApp({ skipAutoSend: true })
+    }
+    // 进入页面后自动刷新预览为“生成”URL（保持 iframe 显示最新交互的生成页面）
+    refreshPreview()
+  }
+}
+
+// 加载更早的历史并 prepend 到 messages
+const loadMoreHistory = async () => {
+  if (!appId.value || !earliestCreateTime.value) return
+  const el = messageBoxRef.value
+  const prevScrollHeight = el?.scrollHeight ?? 0
+  loadingHistory.value = true
+  try {
+    const res = await listAppChatHistory({ appId: appId.value as any, lastCreateTime: earliestCreateTime.value })
+    if (res.data.code !== 0 || !res.data.data) {
+      message.error('获取更多历史失败：' + (res.data.message ?? ''))
+      return
+    }
+    const records = res.data.data.records ?? []
+    const mapped = (records as API.ChatHistory[])
+      .map((r) => ({
+        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' : 'user',
+        content: r.message ?? '',
+        createTime: r.createTime,
+      }))
+      .sort((a, b) => (a.createTime || '').localeCompare(b.createTime || ''))
+
+    if (mapped.length) {
+      messages.value = [...mapped, ...messages.value]
+      earliestCreateTime.value = messages.value.length ? messages.value[0].createTime : undefined
+    }
+    const total = res.data.data.totalRow ?? 0
+    hasMoreHistory.value = total > messages.value.length
+    // 维持滚动条位置：新内容加入后，设置 scrollTop 使页面位置不变
+    await nextTick()
+    if (el) {
+      const newScrollHeight = el.scrollHeight
+      el.scrollTop = newScrollHeight - prevScrollHeight
+    }
+  } finally {
+    loadingHistory.value = false
   }
 }
 
@@ -221,9 +337,8 @@ const send = async (options?: { isAuto?: boolean }) => {
     return
   }
   if (!appId.value) return
-
-  messages.value.push({ role: 'user', content: text })
-  const aiMsg: ChatMsg = { role: 'ai', content: '' }
+  messages.value.push({ role: 'user', content: text, createTime: new Date().toISOString() })
+  const aiMsg: ChatMsg = { role: 'ai', content: '', createTime: undefined }
   messages.value.push(aiMsg)
 
   // 进入流式阶段
@@ -297,17 +412,16 @@ const doDeploy = async () => {
       return
     }
     const urlOrKey = res.data.data
-    // 直接使用后端返回的地址字符串（后端已返回完整 URL，例如 http://localhost/GCyCAK）
-    previewUrl.value = urlOrKey
-    // 部署成功后把后端返回的完整 URL 持久化（每次部署都覆盖），以保证刷新后显示最新部署地址
+    // 记录后端返回的部署地址（直接使用）到 deployedPreviewUrl，并持久化
+    deployedPreviewUrl.value = urlOrKey
     if (appId.value) {
       setPreviewUrl(appId.value, urlOrKey)
     }
-    // 在当前会话中也更新 app 的 deployKey，避免立即刷新时被旧值覆盖
     if (app.value) {
       app.value.deployKey = urlOrKey
     }
-    refreshPreview()
+    // 重新部署后保持 iframe 显示生成预览（refresh 仍指向生成页面）
+    // 如果需要立即查看部署，可点击“查看部署”打开新窗口
     message.success('部署成功')
     void loadApp({ skipAutoSend: true })
   } finally {
@@ -316,13 +430,33 @@ const doDeploy = async () => {
 }
 
 const refreshPreview = () => {
-  console.log('refreshPreview called, previewUrl:', previewUrl.value, 'stored:', getPreviewUrl(appId.value), 'app.deployKey:', app.value?.deployKey)
+  // 永远使用按规则构造的生成预览 URL 来展示（优先展示生成页面）
+  const gen = app.value?.codeGenType ? buildGeneratedPreviewUrl({ id: appId.value, codeGenType: app.value.codeGenType }) : ''
+  if (gen) {
+    previewUrl.value = gen
+  }
+  // 打印调试信息
+  console.log('refreshPreview called, using generated preview:', previewUrl.value, 'deployedPreviewUrl:', deployedPreviewUrl.value)
   iframeNonce.value++
 }
 
 const openPreview = () => {
   if (!previewUrl.value) return
   window.open(previewUrl.value, '_blank')
+}
+
+const openDeployedPreview = () => {
+  if (!deployedPreviewUrl.value) return
+  window.open(deployedPreviewUrl.value, '_blank')
+}
+
+const handleDeployMenuClick = (info: { key: string | number }) => {
+  const k = String(info.key)
+  if (k === 'redeploy') {
+    void doDeploy()
+  } else if (k === 'view') {
+    openDeployedPreview()
+  }
 }
 
 const decodeSseDelta = (raw: string): string => {
@@ -412,12 +546,12 @@ watch(
     streamingMsgIndex.value = -1
     autoSendInFlight.value = false
     closeSse()
-    void loadApp()
+    void loadHistory()
   },
 )
 
 onMounted(async () => {
-  await loadApp()
+  await loadHistory()
 })
 
 onUnmounted(() => {

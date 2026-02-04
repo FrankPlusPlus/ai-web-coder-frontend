@@ -133,7 +133,7 @@ onMounted(() => {
                 <span class="option-label">模式</span>
                 <a-select v-model:value="createForm.codeGenType" class="mode-select" :bordered="false" dropdownClassName="mode-select-dropdown">
                   <a-select-option value="html">单页HTML</a-select-option>
-                  <a-select-option value="multi_file">多文件</a-select-option>
+                  <a-select-option value="multi_file">JavaScript三件套</a-select-option>
                 </a-select>
               </div>
 

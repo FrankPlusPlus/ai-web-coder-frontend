@@ -52,6 +52,11 @@ const router = createRouter({
       name: '应用管理',
       component: () => import('../pages/admin/AppManagePage.vue'),
     },
+    {
+      path: '/admin/chatHistory',
+      name: '对话管理',
+      component: () => import('../pages/admin/ChatHistoryManagePage.vue'),
+    },
   ],
 })
 

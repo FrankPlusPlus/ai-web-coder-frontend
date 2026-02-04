@@ -9,7 +9,6 @@
           width="32"
           height="32"
         />
-        <!-- <span class="site-title">AI Coder</span> -->
       </div>
 
       <nav class="header-center">
