@@ -88,14 +88,14 @@ const fetchFeatured = async () => {
   }
 }
 
-const goChat = (id?: string) => {
-  if (!id) return
-  router.push(`/app/${id}/chat`)
+const goChat = (id?: string | number) => {
+  if (id == null) return
+  router.push(`/app/${String(id)}/chat`)
 }
 
-const goEdit = (id?: string) => {
-  if (!id) return
-  router.push(`/app/${id}/edit`)
+const goEdit = (id?: string | number) => {
+  if (id == null) return
+  router.push(`/app/${String(id)}/edit`)
 }
 
 const doDelete = async (id?: number | string) => {

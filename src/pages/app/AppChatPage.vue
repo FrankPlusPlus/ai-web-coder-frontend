@@ -253,16 +253,16 @@ const loadHistory = async () => {
   if (!appId.value) return
   loadingHistory.value = true
   try {
-    const res = await listAppChatHistory({ appId: appId.value as any })
+    const res = await listAppChatHistory({ appId: appId.value })
     if (res.data.code !== 0 || !res.data.data) {
       message.error('获取对话历史失败：' + (res.data.message ?? ''))
       return
     }
     const records = res.data.data.records ?? []
     // 把后端返回的记录转换为页面需要的格式
-    const mapped = (records as API.ChatHistory[])
+    const mapped: ChatMsg[] = (records as API.ChatHistory[])
       .map((r) => ({
-        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' : 'user',
+        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' as const : 'user' as const,
         content: r.message ?? '',
         createTime: r.createTime,
       }))
@@ -270,7 +270,7 @@ const loadHistory = async () => {
       .sort((a, b) => (a.createTime || '').localeCompare(b.createTime || ''))
 
     messages.value = mapped
-    earliestCreateTime.value = mapped.length ? mapped[0].createTime : undefined
+    earliestCreateTime.value = mapped.length ? mapped[0]?.createTime : undefined
     const total = res.data.data.totalRow ?? 0
     hasMoreHistory.value = total > messages.value.length
   } finally {
@@ -293,15 +293,15 @@ const loadMoreHistory = async () => {
   const prevScrollHeight = el?.scrollHeight ?? 0
   loadingHistory.value = true
   try {
-    const res = await listAppChatHistory({ appId: appId.value as any, lastCreateTime: earliestCreateTime.value })
+    const res = await listAppChatHistory({ appId: appId.value, lastCreateTime: earliestCreateTime.value })
     if (res.data.code !== 0 || !res.data.data) {
       message.error('获取更多历史失败：' + (res.data.message ?? ''))
       return
     }
     const records = res.data.data.records ?? []
-    const mapped = (records as API.ChatHistory[])
+    const mapped: ChatMsg[] = (records as API.ChatHistory[])
       .map((r) => ({
-        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' : 'user',
+        role: (String(r.messageType || '').toLowerCase() === 'ai' || String(r.messageType || '').toLowerCase() === 'assistant') ? 'ai' as const : 'user' as const,
         content: r.message ?? '',
         createTime: r.createTime,
       }))
@@ -309,7 +309,7 @@ const loadMoreHistory = async () => {
 
     if (mapped.length) {
       messages.value = [...mapped, ...messages.value]
-      earliestCreateTime.value = messages.value.length ? messages.value[0].createTime : undefined
+      earliestCreateTime.value = messages.value.length ? messages.value[0]?.createTime : undefined
     }
     const total = res.data.data.totalRow ?? 0
     hasMoreHistory.value = total > messages.value.length
@@ -641,7 +641,7 @@ onUnmounted(() => {
 .bubble {
   max-width: 82%;
   min-width: 0; /* 修复 Flex 布局下被宽内容撑开的问题 */
-  padding: 10px 12px;
+  padding: 14px 18px;
   border-radius: 12px;
   line-height: 1.6;
   font-size: 14px;
@@ -663,8 +663,9 @@ onUnmounted(() => {
 }
 
 .msg.is-ai .bubble {
-  background: #ffffff;
+  background: linear-gradient(180deg, #fefefe 0%, #fafbfc 100%);
   color: #1f2a44;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
 }
 
 .iframe-wrap {
@@ -707,6 +708,144 @@ onUnmounted(() => {
   color: #1f2a44;
 }
 
+/* 文字内容与气泡边缘留出间距，避免贴边 */
+.md {
+  padding: 2px 0;
+  box-sizing: border-box;
+}
+
+/* 段落、列表等排版（通用） */
+.md :deep(p) {
+  margin: 0.5em 0 0.75em;
+  line-height: 1.7;
+  color: inherit;
+}
+.md :deep(p:first-child) {
+  margin-top: 0;
+}
+.md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.md :deep(ul),
+.md :deep(ol) {
+  margin: 0.5em 0 0.75em;
+  padding-left: 1.6em;
+  line-height: 1.7;
+}
+.md :deep(li) {
+  margin: 0.25em 0;
+}
+.md :deep(li > p) {
+  margin: 0.25em 0;
+}
+.md :deep(h1),
+.md :deep(h2),
+.md :deep(h3),
+.md :deep(h4),
+.md :deep(h5),
+.md :deep(h6) {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.4;
+  color: inherit;
+}
+.md :deep(h1:first-child),
+.md :deep(h2:first-child),
+.md :deep(h3:first-child),
+.md :deep(h4:first-child),
+.md :deep(h5:first-child),
+.md :deep(h6:first-child) {
+  margin-top: 0;
+}
+.md :deep(blockquote) {
+  margin: 0.75em 0;
+  padding: 0.4em 0 0.4em 1em;
+  border-left: 4px solid #e6ebf2;
+  color: #64748b;
+}
+.md :deep(hr) {
+  margin: 1em 0;
+  border: none;
+  border-top: 1px solid #e6ebf2;
+}
+.md :deep(> *:first-child) {
+  margin-top: 0 !important;
+}
+.md :deep(> *:last-child) {
+  margin-bottom: 0 !important;
+}
+
+/* ========== AI 气泡内「纯文字」阅读优化（不影响代码块） ========== */
+.msg.is-ai .bubble .md :deep(p) {
+  font-size: 15px;
+  line-height: 1.78;
+  color: #334155;
+  letter-spacing: 0.01em;
+  max-width: 42em; /* 舒适阅读行宽 */
+}
+.msg.is-ai .bubble .md :deep(ul),
+.msg.is-ai .bubble .md :deep(ol) {
+  max-width: 42em;
+  font-size: 15px;
+  line-height: 1.78;
+  color: #334155;
+  letter-spacing: 0.01em;
+}
+.msg.is-ai .bubble .md :deep(li) {
+  margin: 0.35em 0;
+}
+.msg.is-ai .bubble .md :deep(blockquote) {
+  max-width: 42em;
+  font-size: 14px;
+  line-height: 1.72;
+  color: #475569;
+  border-left-color: #cbd5e1;
+  background: rgba(248, 250, 252, 0.6);
+  padding: 0.5em 0 0.5em 1em;
+  border-radius: 0 6px 6px 0;
+}
+.msg.is-ai .bubble .md :deep(h1),
+.msg.is-ai .bubble .md :deep(h2),
+.msg.is-ai .bubble .md :deep(h3),
+.msg.is-ai .bubble .md :deep(h4),
+.msg.is-ai .bubble .md :deep(h5),
+.msg.is-ai .bubble .md :deep(h6) {
+  color: #1e293b;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.msg.is-ai .bubble .md :deep(strong) {
+  font-weight: 600;
+  color: #1e293b;
+}
+.msg.is-ai .bubble .md :deep(em) {
+  font-style: italic;
+  color: #475569;
+}
+.msg.is-ai .bubble .md :deep(a) {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.2s;
+}
+.msg.is-ai .bubble .md :deep(a:hover) {
+  color: #1d4ed8;
+}
+/* 行内代码（仅文字中的 `code`，不影响代码块） */
+.msg.is-ai .bubble .md :deep(p code),
+.msg.is-ai .bubble .md :deep(li code) {
+  display: inline;
+  padding: 0.18em 0.45em;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #f1f5f9;
+  color: #1e293b;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid #e2e8f0;
+}
+
 .md :deep(pre) {
   margin: 0 !important;
   padding: 0 !important;
@@ -717,7 +856,8 @@ onUnmounted(() => {
   display: block;
 }
 
-.md :deep(code) {
+/* 仅代码块内的 code（不影响行内 code） */
+.md :deep(pre code) {
   display: block;
   padding: 12px 16px 16px 16px; /* 底部 padding 增加到 16px，给滚动条留足空间 */
   box-sizing: border-box; /* 确保 padding 包含在宽度内 */

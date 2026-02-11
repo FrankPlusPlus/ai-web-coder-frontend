@@ -217,7 +217,7 @@ const doSearch = () => {
 
 // 删除数据
 const doDelete = async (id: number | string) => {
-  const userId = typeof id === 'string' ? Number(id) : id
+  const userId = id != null ? String(id) : ''
   if (!userId) {
     return
   }

@@ -7,13 +7,13 @@ import { BACKEND_API_URL } from '@/request'
  * - 在生成完成后，预览域名形如： http://localhost:8123/api/static/{codeGenType}_{appId}/
  * - 部署成功后，后端可能返回可访问的 URL 或 deployKey
  */
-export function buildGeneratedPreviewUrl(app: Pick<API.AppVO, 'id' | 'codeGenType'>) {
+export function buildGeneratedPreviewUrl(app: { id?: string | number; codeGenType?: string }) {
   const appId = app.id
   const codeGenType = app.codeGenType
-  if (!appId || !codeGenType) {
+  if (appId == null || appId === '' || !codeGenType) {
     return ''
   }
-  return `${BACKEND_API_URL}/static/${encodeURIComponent(codeGenType)}_${appId}/index.html`
+  return `${BACKEND_API_URL}/static/${encodeURIComponent(codeGenType)}_${String(appId)}/index.html`
 }
 
 export function buildDeployPreviewUrl(deployResult?: string) {

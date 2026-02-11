@@ -85,7 +85,7 @@ const load = async () => {
       return
     }
     const a = res.data.data
-    appOwnerId.value = a.userId
+    appOwnerId.value = a.userId != null ? String(a.userId) : undefined
     form.appName = a.appName ?? ''
     form.cover = a.cover ?? ''
     form.priority = a.priority ?? 0
@@ -96,7 +96,7 @@ const load = async () => {
       return
     }
     const a = res.data.data
-    appOwnerId.value = a.userId
+    appOwnerId.value = a.userId != null ? String(a.userId) : undefined
     form.appName = a.appName ?? ''
   }
 

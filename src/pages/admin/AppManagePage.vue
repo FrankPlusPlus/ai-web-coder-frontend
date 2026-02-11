@@ -131,8 +131,8 @@ const reset = () => {
   void fetchData()
 }
 
-const doDelete = async (id: string) => {
-  const appId = String(id ?? '')
+const doDelete = async (id: string | number | undefined) => {
+  const appId = id != null ? String(id) : ''
   if (!appId) {
     message.warning('删除失败：应用 id 无效')
     return
@@ -160,8 +160,8 @@ const doDelete = async (id: string) => {
 }
 
 const setFeatured = async (record: API.App) => {
-  if (!record.id) return
-  const res = await updateApp({ id: record.id, priority: 99 })
+  if (record.id == null) return
+  const res = await updateApp({ id: String(record.id), priority: 99 })
   if (res.data.code === 0) {
     message.success('已设置为精选')
     void fetchData()
@@ -170,8 +170,9 @@ const setFeatured = async (record: API.App) => {
   }
 }
 
-const goEdit = (id: string) => {
-  router.push(`/app/${id}/edit`)
+const goEdit = (id: string | number | undefined) => {
+  if (id == null) return
+  router.push(`/app/${String(id)}/edit`)
 }
 
 onMounted(() => {
